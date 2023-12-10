@@ -48,10 +48,11 @@ def doInvoke(ctx, fn_name, data, raw_params):
     if isinstance(fn_name, list) and len(fn_name) == 1:
         fn_name = fn_name[0]
 
-    if type(fn_name) != str or not fn_name in invocations:
+    user_invocations = ctx["vars"].get("userInvocationTable", {})
+    if type(fn_name) != str or not (fn_name in invocations or fn_name in user_invocations):
         raise Exception("Not implemented: " + str(fn_name))
 
-    invocation = invocations[fn_name]
+    invocation = user_invocations.get(fn_name, None) or invocations[fn_name]
 
     if "nullable_input" in invocation and util.is_nullable(data):
         return []
