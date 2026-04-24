@@ -10,13 +10,6 @@ use super::{Annotation, AnnotationKind, Attribution, Diagnostic, DiagnosticCode,
 
 // ── Helper types ────────────────────────────────────────────────────────
 
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub(crate) enum ContextVarName {
-    This,
-    Index,
-    Total,
-}
-
 pub(crate) enum ChainStepKind {
     Identifier(String),
     Function {
@@ -27,16 +20,12 @@ pub(crate) enum ChainStepKind {
         integer_arg: Option<i64>,
     },
     External,
-    /// `$this` / `$index` / `$total` — FHIRPath context variables.
-    /// The specific identity is currently only used for debugging; the state
-    /// machine treats all three as transparent pass-throughs at Start.
-    ContextVar(#[allow(dead_code)] ContextVarName),
-    /// Bracket indexer `[expr]`. `index` is `Some(n)` only for integer literals.
-    /// Currently only the presence of the indexer matters for attribution.
-    Indexer {
-        #[allow(dead_code)]
-        index: Option<i64>,
-    },
+    /// `$this` / `$index` / `$total` — FHIRPath context variables. The state
+    /// machine treats all three uniformly (transparent pass-through at Start),
+    /// so we don't carry the specific identity.
+    ContextVar,
+    /// Bracket indexer `[expr]`.
+    Indexer,
 }
 
 pub(crate) struct ChainStep {
@@ -193,18 +182,12 @@ pub(crate) fn decompose_chain(node: &AstNode) -> Option<Vec<ChainStep>> {
                                 link_id_span: None,
                             }])
                         }
-                        "ThisInvocation" => Some(vec![ChainStep {
-                            kind: ChainStepKind::ContextVar(ContextVarName::This),
-                            link_id_span: None,
-                        }]),
-                        "IndexInvocation" => Some(vec![ChainStep {
-                            kind: ChainStepKind::ContextVar(ContextVarName::Index),
-                            link_id_span: None,
-                        }]),
-                        "TotalInvocation" => Some(vec![ChainStep {
-                            kind: ChainStepKind::ContextVar(ContextVarName::Total),
-                            link_id_span: None,
-                        }]),
+                        "ThisInvocation" | "IndexInvocation" | "TotalInvocation" => {
+                            Some(vec![ChainStep {
+                                kind: ChainStepKind::ContextVar,
+                                link_id_span: None,
+                            }])
+                        }
                         _ => None,
                     }
                 }
@@ -274,12 +257,9 @@ pub(crate) fn decompose_chain(node: &AstNode) -> Option<Vec<ChainStep>> {
         }
         "IndexerExpression" => {
             let receiver = node.children.first()?;
-            let index_expr = node.children.get(1)?;
             let mut steps = decompose_chain(receiver)?;
             steps.push(ChainStep {
-                kind: ChainStepKind::Indexer {
-                    index: extract_integer_literal(index_expr),
-                },
+                kind: ChainStepKind::Indexer,
                 link_id_span: None,
             });
             Some(steps)
@@ -497,7 +477,7 @@ fn transition(mut state: SelectionState, step: &ChainStep) -> SelectionState {
         // Context variables ($this / $index / $total) at Start stay at Start —
         // they're transparent pass-throughs for navigation recognition. Real
         // attribution in predicates happens via extract_link_id_from_where.
-        (Anchor::Start, ChainStepKind::ContextVar(_)) => Anchor::Start,
+        (Anchor::Start, ChainStepKind::ContextVar) => Anchor::Start,
 
         // Start + "item" -> Items
         (Anchor::Start, ChainStepKind::Identifier(name)) if name == "item" => Anchor::Items,
@@ -588,22 +568,22 @@ fn transition(mut state: SelectionState, step: &ChainStep) -> SelectionState {
             state.cardinality = Cardinality::One;
             Anchor::AnswerValueProp(prop.clone())
         }
-        (Anchor::FilteredItems, ChainStepKind::Indexer { .. }) => {
+        (Anchor::FilteredItems, ChainStepKind::Indexer) => {
             state.attribution = Attribution::PartialPositional;
             state.cardinality = Cardinality::One;
             Anchor::FilteredItems
         }
-        (Anchor::Answer, ChainStepKind::Indexer { .. }) => {
+        (Anchor::Answer, ChainStepKind::Indexer) => {
             state.attribution = Attribution::PartialPositional;
             state.cardinality = Cardinality::One;
             Anchor::Answer
         }
-        (Anchor::AnswerValue, ChainStepKind::Indexer { .. }) => {
+        (Anchor::AnswerValue, ChainStepKind::Indexer) => {
             state.attribution = Attribution::PartialPositional;
             state.cardinality = Cardinality::One;
             Anchor::AnswerValue
         }
-        (Anchor::AnswerValueProp(prop), ChainStepKind::Indexer { .. }) => {
+        (Anchor::AnswerValueProp(prop), ChainStepKind::Indexer) => {
             state.attribution = Attribution::PartialPositional;
             state.cardinality = Cardinality::One;
             Anchor::AnswerValueProp(prop.clone())
@@ -614,7 +594,7 @@ fn transition(mut state: SelectionState, step: &ChainStep) -> SelectionState {
         {
             Anchor::Unattributable
         }
-        (Anchor::Items, ChainStepKind::Indexer { .. }) => Anchor::Unattributable,
+        (Anchor::Items, ChainStepKind::Indexer) => Anchor::Unattributable,
 
         // Any step on Unattributable keeps us Unattributable.
         (Anchor::Unattributable, _) => Anchor::Unattributable,
